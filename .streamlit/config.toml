@@ -1,0 +1,9 @@
+# .streamlit/config.toml
+
+[global]
+# 禁用所有与将来弃用相关的警告（包括 use_column_width/use_container_width 的警告）
+showWarningOnDirectExecution = false
+
+[deprecation]
+# 禁用 Streamlit 在页面上显示弃用警告框
+show_deprecation_warnings = false
