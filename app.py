@@ -46,10 +46,10 @@ st.markdown("""
 # @st.cache_resource
 # def get_face_detector():
 #     mp_face_detection = mp.solutions.face_detection
-#     return mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+#     return mp_face_detection.FaceDetec    tion(model_selection=1, min_detection_confidence=0.5)
 
 def process_image(image, blur_strength, style, face_visibility_states, detections):
-    """核心图像处理逻辑：根据状态对人脸进行打码"""
+    """核心图像处理逻辑：根据状态对人脸进行打码，使用圆形柔和过渡。"""
     img_np = np.array(image)
     
     h, w, _ = img_np.shape
@@ -61,35 +61,96 @@ def process_image(image, blur_strength, style, face_visibility_states, detection
         if face_visibility_states.get(i, False):
             continue
 
-        # 将 face_recognition 的坐标 (top, right, bottom, left) 转换为 OpenCV 的 (x, y, w_box, h_box)
+        # 将 face_recognition 的坐标 (top, right, bottom, left)
         top, right, bottom, left = bbox
-        x, y = left, top
-        w_box = right - left
-        h_box = bottom - top
         
-        # 边界检查
-        x, y = max(0, x), max(0, y)
-        w_box = min(w_box, w - x)
-        h_box = min(h_box, h - y)
+        # 增加一个 padding 让模糊区域比检测框略大，提高美观度
+        padding = 10
         
+        x = max(0, left - padding)
+        y = max(0, top - padding)
+        x_end = min(w, right + padding)
+        y_end = min(h, bottom + padding)
+        
+        # 重新计算带 padding 的 ROI 尺寸
+        w_box = x_end - x
+        h_box = y_end - y
+        
+        if w_box <= 0 or h_box <= 0: continue
+
         # 提取人脸区域 (ROI)
         roi = output_img[y:y+h_box, x:x+w_box]
         
         if roi.size == 0: continue
 
-        # 应用打码效果
+        # --- 核心改动 1: 应用打码效果到 ROI ---
         if style == "毛玻璃 (Gaussian Blur)":
-            # 动态计算核大小，保证大图小图效果一致
-            ksize = int(w_box // (35 - blur_strength)) | 1 # 确保是奇数
-            roi_blurred = cv2.GaussianBlur(roi, (ksize, ksize), 30)
-            output_img[y:y+h_box, x:x+w_box] = roi_blurred
+            # --- 修复 ZeroDivisionError 的逻辑 ---
+            # 使用反向映射来计算，确保强度100对应最大模糊
+            # 强度 10 对应分母 91 (小 ksize)，强度 100 对应分母 1 (大 ksize)
+            # 确保分母至少为 1
+            denominator = max(1, 101 - blur_strength)
+            
+            # ksize_val: 决定模糊核大小。乘数 10 调整模糊与人脸尺寸的比例。
+            ksize_val = int(w_box / denominator * 10) 
+            
+            # 限制 ksize 的最大值（防止性能问题），并确保最小值
+            ksize_val = min(49, max(3, ksize_val)) 
+            
+            # 确保 ksize 是奇数
+            ksize = ksize_val | 1 
+            
+            processed_roi = cv2.GaussianBlur(roi, (ksize, ksize), 0)
             
         elif style == "马赛克 (Mosaic)":
             # 缩小再放大实现马赛克
-            pixel_size = max(1, int(w_box // (blur_strength / 2)))
-            roi_small = cv2.resize(roi, (max(1, w_box // pixel_size), max(1, h_box // pixel_size)), interpolation=cv2.INTER_LINEAR)
-            roi_pixelated = cv2.resize(roi_small, (w_box, h_box), interpolation=cv2.INTER_NEAREST)
-            output_img[y:y+h_box, x:x+w_box] = roi_pixelated
+            # 强度 10 对应 pixel_size 小 (清晰)，强度 100 对应 pixel_size 大 (模糊)
+            # max(1, ...) 确保 pixel_size 至少为 1
+            pixel_size = max(1, int(w_box // (100 / blur_strength * 3)))
+
+            roi_small = cv2.resize(roi, 
+                                   (max(1, w_box // pixel_size), max(1, h_box // pixel_size)), 
+                                   interpolation=cv2.INTER_LINEAR)
+            processed_roi = cv2.resize(roi_small, 
+                                       (w_box, h_box), 
+                                       interpolation=cv2.INTER_NEAREST)
+        
+        # --- 核心改动 2: 创建和应用圆形柔和遮罩 ---
+        
+        # 1. 创建一个单通道的零矩阵作为遮罩
+        mask = np.zeros((h_box, w_box), dtype=np.float32)
+        
+        # 2. 计算人脸区域的中心点和半径
+        center_x, center_y = w_box // 2, h_box // 2
+        # 半径取较小边的一半的90%
+        radius = min(center_x, center_y) * 0.9 
+        
+        # 3. 使用 cv2.circle 绘制实心白圆 (值设为 255)
+        cv2.circle(mask, (center_x, center_y), int(radius), (255), -1)
+
+        # 4. 对圆形掩码进行高斯模糊，实现柔和过渡 (关键步骤)
+        # sigma 与半径关联，确保过渡自然。至少为 3。
+        sigma = max(3, int(radius * 0.15)) 
+        
+        # 核大小取最大的边长，保证边缘过渡足够平滑。确保是奇数。
+        blur_ksize = (w_box | 1, h_box | 1) 
+        mask_blurred = cv2.GaussianBlur(mask, blur_ksize, sigmaX=sigma)
+        
+        # 5. 归一化到 0-1 范围，并确保是 3 通道 (与图像 ROIs 尺寸匹配)
+        mask_float = mask_blurred / 255.0
+        mask_3channel = np.stack([mask_float] * 3, axis=-1)
+        
+        # 6. 合并：使用 alpha 混合公式实现柔和过渡
+        # output_img_roi = processed_roi * mask_3channel + roi * (1 - mask_3channel)
+        output_img_roi = cv2.addWeighted(processed_roi.astype(np.float32), 
+                                         1.0, 
+                                         roi.astype(np.float32), 
+                                         0.0, 
+                                         0.0)
+        # 用原图与圆形打码区域进行混合
+        output_img_roi = output_img_roi * mask_3channel + roi.astype(np.float32) * (1 - mask_3channel)
+        
+        output_img[y:y+h_box, x:x+w_box] = output_img_roi.astype(np.uint8)
 
     return output_img
 
