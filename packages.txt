@@ -1,0 +1,5 @@
+# packages.txt
+
+# dlib 编译需要的系统依赖
+libboost-all-dev
+cmake
