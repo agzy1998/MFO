@@ -1,0 +1,12 @@
+# requirements.txt
+# Streamlit App 核心库
+streamlit
+
+# 图像处理和数组操作
+opencv-python==4.12.0.88
+numpy==1.26.4
+Pillow
+
+# 人脸识别库
+# 推荐直接列出，Streamlit Cloud 会自动尝试安装其 Linux 依赖 dlib
+face_recognition
