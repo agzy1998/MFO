@@ -12,9 +12,6 @@ dependencies = [
     "pillow>=12.0.0",
     
     # face-recognition 依赖 Dlib，Dlib 需要编译
-    "face_recognition",
-    "dlib", 
     # 确保模型文件也能被下载，虽然部署环境可能默认使用 PyPI 的 face-recognition-models
-    "face-recognition-models @ git+https://github.com/ageitgey/face_recognition_models",
     
 ]
